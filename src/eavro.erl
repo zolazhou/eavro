@@ -219,6 +219,8 @@ parse_type(Simple, Context) when is_binary(Simple) ->
 		end
 	end,
     {Type, Context};
+parse_type([{<<"type">>, Simple}], Context) when is_binary(Simple) ->
+    parse_type(Simple, Context);
 parse_type([{_,_}|_] = Complex, Context) ->
     Parser = 
 	case proplists:get_value(<<"type">>,Complex) of
@@ -249,7 +251,7 @@ binary_to_latin1_atom(Bin) ->
     binary_to_atom(Bin,latin1).
 
 parse_record(Record, Context) ->
-    [Name, Fields] = get_attributes(Record, [<<"name">>, <<"fields">>]),
+    [Name, Ns, Fields] = get_attributes(Record, [<<"name">>, <<"namespace">>, <<"fields">>]),
     {FieldsParsedRev, Context1} = 
 	lists:foldl(
 	  fun(Field, {Fs, Ctx})-> 
@@ -257,7 +259,11 @@ parse_record(Record, Context) ->
 		  {[FieldParsed | Fs], Ctx1}
 	  end, {[],Context}, Fields),
     FieldsParsed = lists:reverse(FieldsParsedRev),
-    AName = binary_to_latin1_atom(Name), %% From Avro spec.: [A-Za-z0-9_]
+    %% From Avro spec.: [A-Za-z0-9_]
+    AName = case Ns of
+                undefined -> binary_to_latin1_atom(Name);
+                _ -> binary_to_latin1_atom(<< Ns/binary, $., Name/binary >>)
+            end,
     RecTypeParsed = 
 	#avro_record{ name   = AName,
 		      fields = FieldsParsed},
