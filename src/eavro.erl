@@ -176,22 +176,32 @@ name_to_jsx(Name) ->
     end.
 
 type_to_jsx(#avro_record{name = Name, fields = Fields} = Record, Context) ->
-    Context1 = dict:store(Name, Record, Context),
-    {JsxFields, Context2} =
-        lists:foldl(
-          fun({FName, FType}, {Acc, Ctx}) ->
-                  {Type, Ctx1} = type_to_jsx(FType, Ctx),
-                  Item = [{name, to_bin(FName)}, {type, Type}],
-                  {[Item|Acc], Ctx1}
-          end, {[], Context1}, Fields),
-    Jsx = [{type, <<"record">>}] ++ name_to_jsx(Name) ++ [{fields, lists:reverse(JsxFields)}],
-    {Jsx, Context2};
+    case dict:find(Name, Context) of
+        {ok, _T} ->
+            {Name, Context};
+        error ->
+            Context1 = dict:store(Name, Record, Context),
+            {JsxFields, Context2} =
+                lists:foldl(
+                fun({FName, FType}, {Acc, Ctx}) ->
+                        {Type, Ctx1} = type_to_jsx(FType, Ctx),
+                        Item = [{name, to_bin(FName)}, {type, Type}],
+                        {[Item|Acc], Ctx1}
+                end, {[], Context1}, Fields),
+            Jsx = [{type, <<"record">>}] ++ name_to_jsx(Name) ++ [{fields, lists:reverse(JsxFields)}],
+            {Jsx, Context2}
+    end;
 type_to_jsx(#avro_enum{name = Name, symbols = Symbols} = Enum, Context) ->
-    Context1 = dict:store(Name, Enum, Context),
-    Jsx = [{type, <<"enum">>}] ++
-          name_to_jsx(Name) ++
-          [{symbols, [to_bin(Symbol) || Symbol <- Symbols]}],
-    {Jsx, Context1};
+    case dict:find(Name, Context) of
+        {ok, _E} ->
+            {Name, Context};
+        error ->
+            Context1 = dict:store(Name, Enum, Context),
+            Jsx = [{type, <<"enum">>}] ++
+                name_to_jsx(Name) ++
+                [{symbols, [to_bin(Symbol) || Symbol <- Symbols]}],
+            {Jsx, Context1}
+    end;
 type_to_jsx(#avro_fixed{name = Name, size = Size}, Context) ->
     {[{type, <<"fixed">>}, {name, to_bin(Name)}, {size, Size}], Context};
 type_to_jsx(#avro_map{values = VType}, Context) ->
@@ -220,11 +230,7 @@ type_to_jsx(B, Context) when is_binary(B) ->
 	<<"string">>  -> ok;
 	<<"bytes">>   -> ok;
 	<<"float">>   -> ok;
-	BadType       ->
-		case dict:find(binary_to_atom(BadType, latin1), Context) of
-		    {ok, T} -> T;
-		    error   -> exit({bad_simple_type_or_alias, BadType, Context})
-		end
+	BadType       -> exit({bad_simple_type, BadType})
     end,
     {B, Context}.
 
