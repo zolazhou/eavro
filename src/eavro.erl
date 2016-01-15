@@ -16,7 +16,7 @@
 	 decode/2, 
 	 decode/3]).
 
--export([ type_to_jsx/1 ]).
+-export([ type_to_jsx/2 ]).
 
 -include("eavro.hrl").
 
@@ -126,7 +126,9 @@ parse_schema(SchemaJsx) ->
 %%
 -spec encode_schema(Schema :: avro_type()) -> binary().
 encode_schema(Schema) ->
-    jsx:encode(type_to_jsx(Schema)).
+    {Jsx, _} = type_to_jsx(Schema, dict:new()),
+    io:format("~p~n", [Jsx]),
+    jsx:encode(Jsx).
 
 %%
 %%
@@ -152,29 +154,64 @@ encode(Schema, Data) ->
 %%
 %% Private functions section
 %%
+binary_join(List, Sep) when is_list(List) and is_binary(Sep) ->
+    lists:foldr(
+      fun (A, <<>>) -> A;
+          (A,    B) -> <<A/binary, Sep/binary, B/binary>>
+      end, <<>>, List).
 
-type_to_jsx(#avro_record{ name = Name, fields = Fields}) ->
-    [{type, <<"record">>},
-     {name, to_bin(Name)}, 
-     {fields, [ [ {name, to_bin(FName)},
-		  {type, type_to_jsx(FType)} ] || {FName, FType} <- Fields]} ];
-type_to_jsx(#avro_enum{ name = Name, symbols = Symbols}) ->
-    [{type, <<"enum">>},
-     {name, to_bin(Name)},
-     {symbols, [ to_bin(Symbol) || Symbol <- Symbols]} ];
-type_to_jsx(#avro_fixed{ name = Name, size = Size }) ->
-    [{type, <<"fixed">>},{name, to_bin(Name)}, {size, Size}];
-type_to_jsx(#avro_map{ values = VType}) ->
-    [{type, <<"map">>},
-     {values, type_to_jsx(VType)}];
-type_to_jsx(#avro_array{ items = IType}) ->
-    [{type, <<"array">>},
-     {items, type_to_jsx(IType)}];
-type_to_jsx(Union) when is_atom(hd(Union)) -> 
-    [ type_to_jsx(T) || T <- Union];
-type_to_jsx(A) when is_atom(A) ->
-    type_to_jsx(atom_to_binary(A,latin1));
-type_to_jsx(B) when is_binary(B) ->
+split_name(Name) when is_atom(Name) ->
+    split_name(to_bin(Name));
+split_name(Name) when is_binary(Name) ->
+    case binary:split(Name, <<".">>, [global]) of
+        [Name] -> {undefined, Name};
+        Tokens -> {binary_join(lists:droplast(Tokens), <<".">>), lists:last(Tokens)}
+    end.
+
+name_to_jsx(Name) ->
+    case split_name(Name) of
+        {undefined, NameBin} ->
+            [{name, NameBin}];
+        {Namespace, NameBin} ->
+            [{name, NameBin}, {namespace, Namespace}]
+    end.
+
+type_to_jsx(#avro_record{name = Name, fields = Fields} = Record, Context) ->
+    Context1 = dict:store(Name, Record, Context),
+    {JsxFields, Context2} =
+        lists:foldl(
+          fun({FName, FType}, {Acc, Ctx}) ->
+                  {Type, Ctx1} = type_to_jsx(FType, Ctx),
+                  Item = [{name, to_bin(FName)}, {type, Type}],
+                  {[Item|Acc], Ctx1}
+          end, {[], Context1}, Fields),
+    Jsx = [{type, <<"record">>}] ++ name_to_jsx(Name) ++ [{fields, lists:reverse(JsxFields)}],
+    {Jsx, Context2};
+type_to_jsx(#avro_enum{name = Name, symbols = Symbols} = Enum, Context) ->
+    Context1 = dict:store(Name, Enum, Context),
+    Jsx = [{type, <<"enum">>}] ++
+          name_to_jsx(Name) ++
+          [{symbols, [to_bin(Symbol) || Symbol <- Symbols]}],
+    {Jsx, Context1};
+type_to_jsx(#avro_fixed{name = Name, size = Size}, Context) ->
+    {[{type, <<"fixed">>}, {name, to_bin(Name)}, {size, Size}], Context};
+type_to_jsx(#avro_map{values = VType}, Context) ->
+    {Values, Context1}= type_to_jsx(VType, Context),
+    {[{type, <<"map">>}, {values, Values}], Context1};
+type_to_jsx(#avro_array{items = IType}, Context) ->
+    {Items, Context1} = type_to_jsx(IType, Context),
+    {[{type, <<"array">>}, {items, Items}], Context1};
+type_to_jsx(Union, Context) when is_atom(hd(Union)) ->
+    {Jsx, Context1} =
+        lists:foldl(
+          fun(T, {Acc, Ctx}) ->
+                  {X, Ctx1} = type_to_jsx(T, Ctx),
+                  {[X|Acc], Ctx1}
+          end, {[], Context}, Union),
+    {lists:reverse(Jsx), Context1};
+type_to_jsx(A, Context) when is_atom(A) ->
+    type_to_jsx(atom_to_binary(A, latin1), Context);
+type_to_jsx(B, Context) when is_binary(B) ->
     case B of
 	<<"null">>    -> ok;
 	<<"boolean">> -> ok;
@@ -184,9 +221,13 @@ type_to_jsx(B) when is_binary(B) ->
 	<<"string">>  -> ok;
 	<<"bytes">>   -> ok;
 	<<"float">>   -> ok;
-	BadType       -> exit({bad_simple_type, BadType})
+	BadType       ->
+		case dict:find(binary_to_atom(BadType, latin1), Context) of
+		    {ok, T} -> T;
+		    error   -> exit({bad_simple_type_or_alias, BadType, Context})
+		end
     end,
-    B.
+    {B, Context}.
 
 parse_types(Types, Context) ->    
     {TypesRev, Context1} = 
