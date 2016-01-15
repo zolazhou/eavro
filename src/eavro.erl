@@ -127,7 +127,6 @@ parse_schema(SchemaJsx) ->
 -spec encode_schema(Schema :: avro_type()) -> binary().
 encode_schema(Schema) ->
     {Jsx, _} = type_to_jsx(Schema, dict:new()),
-    io:format("~p~n", [Jsx]),
     jsx:encode(Jsx).
 
 %%
