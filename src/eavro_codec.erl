@@ -54,7 +54,7 @@ encode(#avro_array{ items = Type }, Data) when is_list(Data) ->
 encode(Union, null) when is_list(Union) ->
     encode(Union, {null, null});
 encode(Union, {Index, Data}) when is_list(Union) and is_integer(Index) ->
-    encode(lists:nth(Index + 1, Union), Data);
+    encode(Union, {lists:nth(Index + 1, Union), Data});
 encode(Union, {Type, Data}) when is_list(Union) ->
     try 
 	I = index_of(Type, Union) - 1,
@@ -62,10 +62,10 @@ encode(Union, {Type, Data}) when is_list(Union) ->
     catch
 	_:not_found -> exit({union_mismatch, Union, Type})
     end;
-encode([null, Type], Data) ->
-    encode(Type, Data);
-encode([Type, null], Data) ->
-    encode(Type, Data).
+encode([null, Type] = Union, Data) ->
+    encode(Union, {Type, Data});
+encode([Type, null] = Union, Data) ->
+    encode(Union, {Type, Data}).
 
 encode_blocks(Type, Data, Encoder) when is_list(Data) ->
     Count = length(Data),
